@@ -1,0 +1,125 @@
+#!/bin/bash
+
+version="cnc ansible 1.1"
+
+help(){
+  echo $version
+  printf "Usage: %s: [-h] [-v] [-r] [-p] [-d] [-s] [-j] [-n] [-a] [-u] [-S] args" $(basename $0)
+  printf "\n
+  -h -- display help (this page)
+  -v -- display version
+  -r -- running the script on dest server
+  -p -- transfer the script to dest server
+  -S -- using service function
+  -j -- install json module
+  -n -- define service name
+  -a -- service action [started|restarted|stopped|reloaded]
+  -u -- define user name
+  -d -- define dest server name
+  -s -- define script name.\n\n"
+}
+
+get_options() {
+# Note that we use `"$@"' to let each command-line parameter expand to a
+# separate word. The quotes around `$@' are essential!
+# We need TEMP as the `eval set --' would nuke the return value of getopt.
+ARGS=`getopt -a -o hvs:pd:rSn:a:u:j --long help,version,script:,push,dest:,run,service,name:,action:,user:,json -- "$@"`
+
+if [ $? != 0 ] ; then echo "Terminating..." >&2 ; exit 1 ; fi
+
+# Note the quotes around `$TEMP': they are essential!
+eval set -- "$ARGS"
+
+#RUN="-m command -a \"bash /home/ncadmin/$SCRIPT_NAME\""
+#PUSH="-m copy -a \"src=/home/ansible/cnc_check/files/$SCRIPT_NAME dest=/home/ncadmin/$SCRIPT_NAME owner=ncadmin group=ncadmin mode=0644\""
+
+while true ; do
+	case "$1" in
+		-h|--help) help ; exit ;;
+		-v|--version) echo $version ; exit ;;
+		-r|--run) MODE=RUN ; shift ;;
+		-p|--push) MODE=PUSH ; shift ;;
+		-S|--service) MODE=SERVICE ; shift ;;
+		-j|--json) MODE=JSON ; shift ;;
+		-n|--name) SERVICE_NAME=$2 ; shift 2 ;;
+		-a|--action) SERVICE_ACTION=$2 ; shift 2 ;;
+		-u|--user) USER=$2 ; shift 2 ;;
+		-d|--dest) DEST_SERVER=$2 ; shift 2;;
+		-s|--script) SCRIPT_NAME=$2 ; shift 2 ;;
+		--) shift ; break ;;
+		*) echo "Internal error!" ; exit 1 ;;
+	esac
+done
+}
+
+check_options(){
+
+#while [ -z "$MODE" ] ;do
+#	printf "Please input %s: " "--run or --push"
+#	read MODE
+#done
+
+while [ -z "$DEST_SERVER" ] ;do
+        printf "Please input %s: " "destnation server name"
+        read DEST_SERVER
+done
+
+while [ -z "$USER" -o $USER == root ] ;do
+        printf "Please input %s: " "remote user name"
+        read USER
+done
+
+#while [ -z "$SCRIPT_NAME" ] ;do
+#        printf "Please input %s: " "script name"
+#        read SCRIPT_NAME
+#done
+
+}
+
+create_host(){
+
+CUSTOMER_NAME=$(echo "$DEST_SERVER" | awk -F "-" '{print $2}')
+if [ $CUSTOMER_NAME == nc ]
+	then
+	ANSIBLE_PORT=$(cat /etc/ssh/ssh_config.d/netcloud.ssh_config | egrep -A 2 "host $DEST_SERVER$" | grep port | awk '{print $2}')
+	ANSIBLE_IP=$(cat /etc/ssh/ssh_config.d/netcloud.ssh_config | egrep -A 2 "host $DEST_SERVER$" | grep hostname | awk '{print $2}')
+	else
+	ANSIBLE_PORT=$(cat /etc/ssh/ssh_config.d/$CUSTOMER_NAME.ssh_config | egrep -A 2 "host $DEST_SERVER$" | grep port | awk '{print $2}')
+	ANSIBLE_IP=$(cat /etc/ssh/ssh_config.d/$CUSTOMER_NAME.ssh_config | egrep -A 2 "host $DEST_SERVER$" | grep hostname | awk '{print $2}')
+fi
+echo  -e "[host]\n
+$DEST_SERVER ansible_ssh_host=$ANSIBLE_IP ansible_ssh_port=$ANSIBLE_PORT" > /tmp/hosts
+
+}
+
+nc_ansible(){
+
+ANSIBLE=/usr/bin/ansible
+#DEFAULT_USER=ncadmin
+if [ $MODE == RUN ]
+        then
+        RUN="bash /home/ncadmin/$SCRIPT_NAME"
+        sudo $ANSIBLE $DEST_SERVER -m command -a "$RUN" -i /tmp/hosts -u $USER -k -s
+        elif [ $MODE == PUSH ]
+        then
+        PUSH="src=/home/ansible/cnc_check/files/$SCRIPT_NAME dest=/home/ncadmin/$SCRIPT_NAME owner=ncadmin group=ncadmin mode=0644"
+        sudo $ANSIBLE $DEST_SERVER -m copy -a "$PUSH" -i /tmp/hosts -u $USER -k -s
+        elif [ $MODE == SERVICE ]
+        then
+        SERVICE="name=$SERVICE_NAME state=$SERVICE_ACTION"
+        sudo $ANSIBLE $DEST_SERVER -m service -a "$SERVICE" -i /tmp/hosts -u $USER -k -s
+	elif [ $MODE == JSON ]
+        then
+        JSON="yum -y install python-simplejson"
+        sudo $ANSIBLE $DEST_SERVER -m raw -a "$JSON" -i /tmp/hosts -u $USER -k -s
+        else
+        echo "wrong mode" ; exit 1
+fi
+
+}
+
+
+get_options "$@"
+check_options
+create_host
+nc_ansible
